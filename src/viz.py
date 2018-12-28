@@ -8,7 +8,7 @@ import h5py
 import os
 from mpl_toolkits.mplot3d import Axes3D
 
-def show3Dpose(channels, ax, lcolor="#3498db", rcolor="#e74c3c", add_labels=False): # blue, orange
+def show3Dpose(channels, ax, lcolor="#3498db", rcolor="#e74c3c", add_labels=False, fix_range=False): # blue, orange
   """
   Visualize a 3d skeleton
 
@@ -33,11 +33,16 @@ def show3Dpose(channels, ax, lcolor="#3498db", rcolor="#e74c3c", add_labels=Fals
     x, y, z = [np.array( [vals[I[i], j], vals[J[i], j]] ) for j in range(3)]
     ax.plot(x, y, z, marker='o', markersize=2, lw=1, c=lcolor if LR[i] else rcolor)
 
-  RADIUS = 750 # space around the subject
-  xroot, yroot, zroot = vals[0,0], vals[0,1], vals[0,2]
-  ax.set_xlim3d([-RADIUS+xroot, RADIUS+xroot])
-  ax.set_zlim3d([-RADIUS+zroot, RADIUS+zroot])
-  ax.set_ylim3d([-RADIUS+yroot, RADIUS+yroot])
+  if fix_range:
+    ax.set_xlim3d([-1500, 1500])
+    ax.set_zlim3d([-1000, 1000])
+    ax.set_ylim3d([-1200, 1200]) 
+  else:
+    RADIUS = 750 # space around the subject
+    xroot, yroot, zroot = vals[0,0], vals[0,1], vals[0,2]
+    ax.set_xlim3d([-RADIUS+xroot, RADIUS+xroot])
+    ax.set_zlim3d([-RADIUS+zroot, RADIUS+zroot])
+    ax.set_ylim3d([-RADIUS+yroot, RADIUS+yroot])
 
   if add_labels:
     ax.set_xlabel("x")
