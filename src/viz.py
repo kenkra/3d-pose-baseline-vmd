@@ -8,7 +8,7 @@ import h5py
 import os
 from mpl_toolkits.mplot3d import Axes3D
 
-def show3Dpose(channels, ax, lcolor="#3498db", rcolor="#e74c3c", add_labels=False, fix_range=False): # blue, orange
+def show3Dpose(channels, ax, lcolor="#3498db", rcolor="#e74c3c", add_labels=False, root_xyz=None): # blue, orange
   """
   Visualize a 3d skeleton
 
@@ -33,10 +33,10 @@ def show3Dpose(channels, ax, lcolor="#3498db", rcolor="#e74c3c", add_labels=Fals
     x, y, z = [np.array( [vals[I[i], j], vals[J[i], j]] ) for j in range(3)]
     ax.plot(x, y, z, marker='o', markersize=2, lw=1, c=lcolor if LR[i] else rcolor)
 
-  if fix_range:
-    ax.set_xlim3d([-1500, 1500])
-    ax.set_zlim3d([-1000, 1000])
-    ax.set_ylim3d([-1200, 1200]) 
+  if root_xyz is not None:
+    ax.set_xlim3d([-1500+root_xyz[0], 1500+root_xyz[0]])
+    ax.set_zlim3d([-1000+root_xyz[2], 1000+root_xyz[2]])
+    ax.set_ylim3d([-1200+root_xyz[1], 1200+root_xyz[1]]) 
   else:
     RADIUS = 750 # space around the subject
     xroot, yroot, zroot = vals[0,0], vals[0,1], vals[0,2]

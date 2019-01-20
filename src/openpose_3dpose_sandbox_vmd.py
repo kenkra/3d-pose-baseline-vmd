@@ -93,21 +93,22 @@ def main(_):
         batch_size = 128
         model = create_model(sess, actions, batch_size)
 
-        # 以下の４つは仮の値で計算。多少違っていても、精度に影響はないと思う
-        center_2d_x = 640 / 2 # x軸の中心（x解像度の半分）
-        center_2d_y = 360 / 2 # y軸の中心（y解像度の半分）
-        z_distance = 4000 # カメラから体までの距離(mm) 遠近の影響計算で使用
-        camera_incline = 0 # カメラの水平方向に対する下への傾き（度）
+        # 入力画像のスケール調整のため、NeckからHipまでの距離を測定
+        length_neck2hip = get_length_neck2hip(smoothed)
+        length_neck2hip_mean = np.mean(length_neck2hip)
+        input_scaling_factor = 110 / length_neck2hip_mean
 
-        teacher_camera_incline = 13 # 教師データ(Human3.6M)のカメラの傾き（下向きに平均13度）
-        # neckからHipまでが110ピクセル程度になるように入力を拡大する(教師データと同程度のスケール)
-        input_scaling_factor = 110 / length_neck2hip_xy(smoothed)
+        poses3d_list = []
+        poses2d_list = []
 
-        length_sum2d = 0
-        length_sum3d = 0
+        # 2dと3dのスケール比率計算で使用
+        length_2d_list = []
+        length_3d_list = []
 
         for n, (frame, xy) in enumerate(smoothed.items()):
             logger.info("calc idx {0}, frame {1}".format(idx, frame))
+            #if frame % 300 == 0:
+            #    print(frame)
 
             # map list into np array  
             joints_array = np.zeros((1, 36))
@@ -139,7 +140,9 @@ def main(_):
             # logger.debug(enc_in)
 
             poses2d = enc_in
+
             # 入力データの拡大
+            # neckからHipまでが110ピクセル程度になるように入力を拡大する(教師データと同程度のスケール)
             enc_in = enc_in * input_scaling_factor
 
             enc_in = enc_in[:, dim_to_use_2d]
@@ -161,42 +164,102 @@ def main(_):
             enc_in, poses3d = map( np.vstack, [enc_in, all_poses_3d] )
             subplot_idx, exidx = 1, 1
 
+            poses3d_list.append(poses3d[0])
+            poses2d_list.append(poses2d[0])
+
+            length_2d_list.append(sum_length_xy(poses2d[0],2))
+            length_3d_list.append(sum_length_xy(poses3d[0],3))
+
+        # OpenPose出力の(x, y)とBaseline出力のzから、3次元の位置を計算する
+
+        # OpenPose出力値とBaseline出力値のスケール比率
+        # 骨格の長さの合計の比較することで、比率を推定
+        # 前後の91フレームで移動平均をとることで、結果を安定化する
+        move_ave_length_2d = calc_move_average(length_2d_list, 91)
+        move_ave_length_3d = calc_move_average(length_3d_list, 91)
+        move_ave_length_2d[move_ave_length_2d == 0] = 1 # error防止
+        xy_scale = move_ave_length_3d / move_ave_length_2d
+
+        # 以下の４つは仮の値で計算。多少違っていても、精度に影響はないと思う
+        center_2d_x, center_2d_y  = camera_center_temp(smoothed) #動画の中心座標（動画の解像度の半分）
+        logger.info("center_2d_x {0}".format(center_2d_x))
+        z_distance = 4000 # カメラから体までの距離(mm) 遠近の影響計算で使用
+        camera_incline = 0 # カメラの水平方向に対する下への傾き（度）
+
+        teacher_camera_incline = 13 # 教師データ(Human3.6M)のカメラの傾き（下向きに平均13度）
+
+        for frame, (poses3d, poses2d) in enumerate(zip(poses3d_list, poses2d_list)):
+
             # 誤差を減らすため、OpenPose出力の(x, y)と3dPoseBaseline出力のzから、3次元の位置を計算する
-            
-            # OpenPose出力値とBaseline出力値のスケール比率を推定
-            xy_scale, length_sum2d, length_sum3d = estimate_scale_xy(poses2d[0], poses3d[0], length_sum2d, length_sum3d)
-            poses3d_op_xy = np.zeros((poses3d.shape[0], 96))
-            for i in range(poses3d.shape[0]):
-                for j in [0, 1, 2, 3, 6, 7, 8, 13, 15, 17, 18, 19, 25, 26, 27]:
-                    # Hipとの差分
-                    dy = poses3d[i][j * 3 + 1] - poses3d[i][0 * 3 + 1]
-                    dz = poses3d[i][j * 3 + 2] - poses3d[i][0 * 3 + 2]
-                    # 教師データのカメラ傾きを補正
-                    dz = dz - dy * math.tan(math.radians(teacher_camera_incline - camera_incline))
-                    # 遠近によるx,yの拡大率
-                    z_ratio = (z_distance + dz) / z_distance
-                    # x, yはOpenposeの値から計算
-                    poses3d_op_xy[i][j * 3] = (poses2d[i][j * 2] - center_2d_x) * xy_scale * z_ratio
-                    poses3d_op_xy[i][j * 3 + 1] = (poses2d[i][j * 2 + 1] - center_2d_y) * xy_scale * z_ratio
-                    # zはBaselineの値から計算
-                    poses3d_op_xy[i][j * 3 + 2] = dz
+        
+            poses3d_op_xy = np.zeros(96)
+            for i in [0, 1, 2, 3, 6, 7, 8, 13, 15, 17, 18, 19, 25, 26, 27]:
+                # Hipとの差分
+                dy = poses3d[i * 3 + 1] - poses3d[0 * 3 + 1]
+                dz = poses3d[i * 3 + 2] - poses3d[0 * 3 + 2]
+                # 教師データのカメラ傾きを補正
+                dz = dz - dy * math.tan(math.radians(teacher_camera_incline - camera_incline))
+                # 遠近によるx,yの拡大率
+                z_ratio = (z_distance + dz) / z_distance
+                # x, yはOpenposeの値から計算
+                poses3d_op_xy[i * 3] = (poses2d[i * 2] - center_2d_x) * xy_scale[frame] * z_ratio
+                poses3d_op_xy[i * 3 + 1] = (poses2d[i * 2 + 1] - center_2d_y) * xy_scale[frame] * z_ratio
+                # zはBaselineの値から計算
+                poses3d_op_xy[i * 3 + 2] = dz
 
-                # 12(Spine)はOpenPoseの出力にないため、代わりに13(Thorax)からの差分で計算する
-                # 14(Neck/Nose)はOpenPoseの出力にないため、代わりに13(Thorax)からの差分で計算する
-                # 15(Nose)はOpenPoseの出力にないため、代わりに13(Thorax)からの差分で計算する
-                for j , k in [(12, 13),(14, 13),(15, 13)]:
-                    # 差分
-                    dx = poses3d[i][j * 3] - poses3d[i][k * 3]
-                    dy = poses3d[i][j * 3 + 1] - poses3d[i][k * 3 + 1]
-                    dz = poses3d[i][j * 3 + 2] - poses3d[i][k * 3 + 2]
-                    # 教師データのカメラ傾きを補正
-                    dz = dz - dy * math.tan(math.radians(teacher_camera_incline - camera_incline))
-                    # x, y ,z
-                    poses3d_op_xy[i][j * 3] = poses3d_op_xy[i][k * 3] + dx
-                    poses3d_op_xy[i][j * 3 + 1] = poses3d_op_xy[i][k * 3 + 1] + dy
-                    poses3d_op_xy[i][j * 3 + 2] = poses3d_op_xy[i][k * 3 + 2] + dz
+            # MMD化したときに肩の崩れを防ぐための処理
+            # OpenPoseのNeck(13.Thorax)の出力位置は、MMDや3dPoseBaselineのThoraxより少し下になるため、少し上へ移動する。
+            poses3d_op_xy[13 * 3] = 1.1 * poses3d_op_xy[13 * 3] - 0.1 * poses3d_op_xy[0 * 3]
+            poses3d_op_xy[13 * 3 + 1] = 1.1 * poses3d_op_xy[13 * 3 + 1] - 0.1 * poses3d_op_xy[0 * 3 + 1]
+            poses3d_op_xy[13 * 3 + 2] = 1.1 * poses3d_op_xy[13 * 3 + 2] - 0.1 * poses3d_op_xy[0 * 3 + 2]
 
-            poses3d = poses3d_op_xy
+            # 12(Spine)、14(Neck/Nose)、15(Head)はOpenPoseの出力にないため、baseline(poses3d)から計算する
+            for j in [12, 14, 15]:
+
+                # 13(Thorax)は認識されることが多いため基準とする
+                # 差分
+                dx = poses3d[j * 3] - poses3d[13 * 3]
+                dy = poses3d[j * 3 + 1] - poses3d[13 * 3 + 1]
+                dz = poses3d[j * 3 + 2] - poses3d[13 * 3 + 2]
+                # 教師データのカメラ傾きを補正
+                dz = dz - dy * math.tan(math.radians(teacher_camera_incline - camera_incline))
+                # 13(Thorax)からの差分でx, y ,zを求める
+                poses3d_op_xy[j * 3] = poses3d_op_xy[13 * 3] + dx
+                poses3d_op_xy[j * 3 + 1] = poses3d_op_xy[13 * 3 + 1] + dy
+                poses3d_op_xy[j * 3 + 2] = poses3d_op_xy[13 * 3 + 2] + dz
+                
+            # MMD上で少し顎を引くための処理
+            poses3d_op_xy[15 * 3] += 0.5 * (poses3d_op_xy[14 * 3] - poses3d_op_xy[13 * 3])
+            poses3d_op_xy[15 * 3 + 1] += 0.5 * (poses3d_op_xy[14 * 3 + 1] - poses3d_op_xy[13 * 3 + 1])
+            poses3d_op_xy[15 * 3 + 2] += 0.5 * (poses3d_op_xy[14 * 3 + 2] - poses3d_op_xy[13 * 3 + 2])
+
+            poses3d_list[frame] = poses3d_op_xy
+        
+        logger.info("calc ground y")
+        # 最も高さが低い足の部位のYを取得(この座標系ではY値が大きい方が低い)
+        foot_joint_no = [1, 2, 3, 6, 7, 8]
+        max_pos = []
+        for frame, poses3d in enumerate(poses3d_list):
+            max_pos.append(np.max([poses3d[i * 3 + 1] for i in foot_joint_no]))
+
+        # 地面についている部位の位置（通常は足首）をY軸の0になるように移動する
+        for frame, poses3d in enumerate(poses3d_list):
+            # 120フレーム分の位置を取得
+            max_pos_slice = max_pos[int(np.max([0, frame-60])):frame+60]
+            # 半分以上のフレームでは着地していると仮定し、メディアンを着地時の足の位置とする
+            ankle_pos = np.median(max_pos_slice)
+
+            poses3d_ground = np.zeros(96)
+            for i in range(len(data_utils.H36M_NAMES)):
+                poses3d_ground[i * 3] = poses3d[i * 3]
+                poses3d_ground[i * 3 + 1] = poses3d[i * 3 + 1] - ankle_pos
+                poses3d_ground[i * 3 + 2] = poses3d[i * 3 + 2]
+
+            poses3d_list[frame] = poses3d_ground
+
+        for frame, (poses3d, poses2d) in enumerate(zip(poses3d_list, poses2d_list)):
+            if frame % 300 == 0:
+                logger.info("output frame {}".format(frame))
 
             # 座標の変換
             poses3d = poses3d.reshape(-1, 3)
@@ -206,7 +269,7 @@ def main(_):
             ])
             poses3d = R.dot(poses3d.T)
             poses3d = poses3d.T
-            poses3d = poses3d.reshape(-1, 96)
+            poses3d = poses3d.reshape(-1)
 
             # max = 0
             # min = 10000
@@ -231,18 +294,23 @@ def main(_):
             #         poses3d[i][j * 3 + 2] += (500 - spine_y)
 
             # Plot 3d predictions
-            ax = plt.subplot(gs1[subplot_idx - 1], projection='3d')
-            ax.view_init(18, 280)    
-            logger.debug(np.min(poses3d))
+
+            # logger.debug(np.min(poses3d))
             # if np.min(poses3d) < -1000 and before_pose is not None:
             #    poses3d = before_pose
 
             p3d = poses3d
             # logger.debug("poses3d")
             # logger.debug(poses3d)
+            if frame == 0:
+                first_xyz = [0,0,0]
+                first_xyz[0], first_xyz[1], first_xyz[2]= p3d[0], p3d[1], p3d[2]
 
             if level[FLAGS.verbose] == logging.INFO:
-                viz.show3Dpose(p3d, ax, lcolor="#9b59b6", rcolor="#2ecc71", add_labels=True, fix_range=True)
+                ax = plt.subplot(gs1[subplot_idx - 1], projection='3d')
+                ax.view_init(18, 280)    
+
+                viz.show3Dpose(p3d, ax, lcolor="#9b59b6", rcolor="#2ecc71", add_labels=True, root_xyz=first_xyz)
 
                 # 各フレームの単一視点からのはINFO時のみ
                 pngName = frame3d_dir + '/tmp_{0:012d}.png'.format(frame)
@@ -256,13 +324,13 @@ def main(_):
                 for azim in [0, 45, 90, 135, 180, 225, 270, 315, 360]:
                     ax2 = plt.subplot(gs1[subplot_idx - 1], projection='3d')
                     ax2.view_init(18, azim)
-                    viz.show3Dpose(p3d, ax2, lcolor="#FF0000", rcolor="#0000FF", add_labels=True, fix_range=True)
+                    viz.show3Dpose(p3d, ax2, lcolor="#FF0000", rcolor="#0000FF", add_labels=True, root_xyz=first_xyz)
 
                     pngName2 = frame3d_dir + '/tmp_{0:012d}_{1:03d}.png'.format(frame, azim)
                     plt.savefig(pngName2)
             
             #関節位置情報の出力
-            write_pos_data(poses3d, ax, posf)
+            write_pos_data(poses3d, posf)
 
         posf.close()
 
@@ -273,49 +341,74 @@ def main(_):
 
         logger.info("Done!".format(pngName))
 
-# OpenPose出力値とBaseline出力値のスケール比率を推定する
-# 2次元での骨格の長さ合計、3次元のxy平面での骨格の長さ合計の比率から推定
-def estimate_scale_xy(channels2d, channels3d, length_sum2d, length_sum3d):
-    assert channels3d.size == len(data_utils.H36M_NAMES)*3, "channels should have 96 entries, it has %d instead" % channels3d.size
-    assert channels2d.size == len(data_utils.H36M_NAMES)*2, "channels should have 96 entries, it has %d instead" % channels2d.size
-    vals3d = np.reshape( channels3d, (len(data_utils.H36M_NAMES), -1) )
-    vals2d = np.reshape( channels2d, (len(data_utils.H36M_NAMES), -1) )
+# 骨格の長さ合計（xy平面上）
+def sum_length_xy(channels, dim):
+    if dim == 3:
+        assert channels.size == len(data_utils.H36M_NAMES)*3, "channels should have 96 entries, it has %d instead" % channels.size
+    else:
+        assert channels.size == len(data_utils.H36M_NAMES)*2, "channels should have 64 entries, it has %d instead" % channels.size
+    vals = np.reshape( channels, (len(data_utils.H36M_NAMES), -1) )
 
     I  = np.array([1,2,3,1,7,8,1, 13,14,14,18,19,14,26,27])-1 # start points
     J  = np.array([2,3,4,7,8,9,13,14,16,18,19,20,26,27,28])-1 # end points
 
     # xy平面上の骨格の長さの合計
+    length_sum = 0
     for i in np.arange( len(I) ): 
-        length = np.sqrt((vals2d[I[i]][0] - vals2d[J[i]][0]) ** 2 + (vals2d[I[i]][1] - vals2d[J[i]][1]) ** 2)
-        length_sum2d += length
+        length = np.sqrt((vals[I[i]][0] - vals[J[i]][0]) ** 2 + (vals[I[i]][1] - vals[J[i]][1]) ** 2)
+        length_sum += length
 
-        length = np.sqrt((vals3d[I[i]][0] - vals3d[J[i]][0]) ** 2 + (vals3d[I[i]][1] - vals3d[J[i]][1]) ** 2)
-        length_sum3d += length
-    
-    if length_sum2d == 0:
-        return 1, length_sum2d, length_sum3d
+    return length_sum
 
-    return length_sum3d / length_sum2d, length_sum2d, length_sum3d
+def calc_move_average(data, n):
+    move_all1 = np.convolve(np.ones(len(data)), np.ones(n), 'full')
+    move_all1_sl = move_all1[int(n/2):int(n/2)+len(data)]
+    move_data = np.convolve(data, np.ones(n), 'full')
+    move_data_sl = move_data[int(n/2):int(n/2)+len(data)]
+    return move_data_sl / move_all1_sl
 
-# 2次元でのNeckからHipまでの長さの平均を取得
-def length_neck2hip_xy(smoothed):
-    count = 0
-    length = 0
-    for (frame, xy) in smoothed.items():
+# 2次元でのNeckからHipまでの長さの配列を取得
+def get_length_neck2hip(smoothed):
+    length = []
+    for frame, xy in smoothed.items():
         neck_x = xy[1 * 2]
         neck_y = xy[1 * 2 + 1]
         # Hip = RHip * 0.5 + LHip * 0.5
         hip_x = xy[8 * 2] * 0.5 + xy[11 * 2] * 0.5
         hip_y = xy[8 * 2 + 1] * 0.5 + xy[11 * 2 + 1] * 0.5
-        length += ((neck_x - hip_x) ** 2 + (neck_y - hip_y) ** 2) ** 0.5 
-        count += 1
-
-    if count == 0 or length == 0:
-        return 100
+        length.append(((neck_x - hip_x) ** 2 + (neck_y - hip_y) ** 2) ** 0.5)
     
-    return length / count
+    return length
 
-def write_pos_data(channels, ax, posf):
+# カメラの中心座標（仮）を返す
+def camera_center_temp(smoothed):
+    sum_neck_x = 0
+    sum_neck_y = 0
+    count = 0
+    for (frame, xy) in smoothed.items():
+        sum_neck_x += xy[1* 2]
+        sum_neck_y += xy[1 * 2 + 1]
+        count += 1
+    
+    avrage_x = sum_neck_x / count
+    avrage_y = sum_neck_y / count
+
+    # 中心からずれが少ない解像度を選ぶ
+    for i, (x, y) in enumerate([(640, 360),(1280, 720),(1920, 1080), (3840, 2160)]):
+        gap_x =  abs(avrage_x/x - 0.5)
+        gap_y =  abs(avrage_y/y - 0.5)
+        # 中心からのずれが広がった場合は、前回の解像度の半分を返す
+        if i != 0 and gap_x > before_gap_x and gap_y > before_gap_y:
+            return before_x/2, before_y/2
+        before_x = x
+        before_y = y
+        before_gap_x = gap_x
+        before_gap_y = gap_y
+    
+    return x/2, y/2
+
+
+def write_pos_data(channels, posf):
 
     assert channels.size == len(data_utils.H36M_NAMES)*3, "channels should have 96 entries, it has %d instead" % channels.size
     vals = np.reshape( channels, (len(data_utils.H36M_NAMES), -1) )

@@ -327,6 +327,7 @@ def read_openpose_json(openpose_output_dir, idx, is_debug=False):
 
         # frame range
         smooth_n = 7
+        smooth_min_n = 3
         smooth_start_frame = frame -  smooth_n // 2
         smooth_end_frame = smooth_start_frame +  smooth_n - 1
         if smooth_start_frame < 0:
@@ -352,12 +353,7 @@ def read_openpose_json(openpose_output_dir, idx, is_debug=False):
                     x_v.append(cache[neighbor][x])
                     y_v.append(cache[neighbor][y])
 
-            if len(x_v) >= (smooth_end_frame - smooth_start_frame + 1) / 2:
-                reliable = True
-            else:
-                reliable = False
-
-            if reliable:
+            if len(x_v) >= smooth_min_n:
                 # 配列の長さを奇数にする
                 if len(x_v) % 2 == 0:
                     x_v.append(cache[frame][x])
