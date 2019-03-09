@@ -37,6 +37,8 @@ tf.app.flags.DEFINE_boolean("predict_14", False, "predict 14 joints")
 tf.app.flags.DEFINE_boolean("use_sh", False, "Use 2d pose predictions from StackedHourglass")
 tf.app.flags.DEFINE_string("action","All", "The action to train on. 'All' means all the actions")
 
+tf.app.flags.DEFINE_string("head_nose_test", "", "test nose param")
+
 # Architecture
 tf.app.flags.DEFINE_integer("linear_size", 1024, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("num_layers", 2, "Number of layers in the model.")
@@ -87,7 +89,8 @@ train_dir = os.path.join( FLAGS.train_dir,
   # 'maxnorm' if FLAGS.max_norm else 'no_maxnorm',
   'batch_normalization' if FLAGS.batch_norm else 'nbn',
   # 'batch_normalization' if FLAGS.batch_norm else 'no_batch_normalization',
-  'use_stacked_hourglass' if FLAGS.use_sh else 'nsh',
+  #'use_stacked_hourglass' if FLAGS.use_sh else 'nsh',
+  'use_stacked_hourglass' + FLAGS.head_nose_test if FLAGS.use_sh else 'nsh',
   # 'use_stacked_hourglass' if FLAGS.use_sh else 'not_stacked_hourglass',
   'predict_14' if FLAGS.predict_14 else 'predict_17')
 
@@ -173,7 +176,10 @@ def train():
 
   # Read stacked hourglass 2D predictions if use_sh, otherwise use groundtruth 2D projections
   if FLAGS.use_sh:
-    train_set_2d, test_set_2d, data_mean_2d, data_std_2d, dim_to_ignore_2d, dim_to_use_2d = data_utils.read_2d_predictions(actions, FLAGS.data_dir)
+    if FLAGS.head_nose_test != '':
+      train_set_2d, test_set_2d, data_mean_2d, data_std_2d, dim_to_ignore_2d, dim_to_use_2d = data_utils.read_2d_predictions_change_head(actions, FLAGS.data_dir, rcams, head_nose_test=FLAGS.head_nose_test)
+    else:
+      train_set_2d, test_set_2d, data_mean_2d, data_std_2d, dim_to_ignore_2d, dim_to_use_2d = data_utils.read_2d_predictions(actions, FLAGS.data_dir)
   else:
     train_set_2d, test_set_2d, data_mean_2d, data_std_2d, dim_to_ignore_2d, dim_to_use_2d = data_utils.create_2d_data( actions, FLAGS.data_dir, rcams )
   print( "done reading and normalizing data." )
@@ -429,7 +435,10 @@ def sample():
     actions, FLAGS.data_dir, FLAGS.camera_frame, rcams, FLAGS.predict_14 )
 
   if FLAGS.use_sh:
-    train_set_2d, test_set_2d, data_mean_2d, data_std_2d, dim_to_ignore_2d, dim_to_use_2d = data_utils.read_2d_predictions(actions, FLAGS.data_dir)
+    if FLAGS.head_nose_test == '':
+      train_set_2d, test_set_2d, data_mean_2d, data_std_2d, dim_to_ignore_2d, dim_to_use_2d = data_utils.read_2d_predictions(actions, FLAGS.data_dir)
+    else:
+      train_set_2d, test_set_2d, data_mean_2d, data_std_2d, dim_to_ignore_2d, dim_to_use_2d = data_utils.read_2d_predictions_change_head(actions, FLAGS.data_dir, rcams,head_nose_test=FLAGS.head_nose_test)
   else:
     train_set_2d, test_set_2d, data_mean_2d, data_std_2d, dim_to_ignore_2d, dim_to_use_2d = data_utils.create_2d_data( actions, FLAGS.data_dir, rcams )
   print( "done reading and normalizing data." )

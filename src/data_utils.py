@@ -389,6 +389,71 @@ def read_2d_predictions( actions, data_dir ):
 
   return train_set, test_set, data_mean, data_std, dim_to_ignore, dim_to_use
 
+def read_2d_predictions_change_head( actions, data_dir, rcams ,head_nose_test):
+  """
+  Loads 2d data from precomputed Stacked Hourglass detections
+  ただし、頭(OpenPoseでは鼻)の位置は、Stacked Hourglassを使わない
+
+  Args
+    actions: list of strings. Actions to load
+    data_dir: string. Directory where the data can be loaded from
+    rcams: dictionary with camera parameters
+  Returns
+    train_set: dictionary with loaded 2d stacked hourglass detections for training
+    test_set: dictionary with loaded 2d stacked hourglass detections for testing
+    data_mean: vector with the mean of the 2d training data
+    data_std: vector with the standard deviation of the 2d training data
+    dim_to_ignore: list with the dimensions to not predict
+    dim_to_use: list with the dimensions to predict
+  """
+
+  train_set = load_stacked_hourglass( data_dir, TRAIN_SUBJECTS, actions)
+  test_set  = load_stacked_hourglass( data_dir, TEST_SUBJECTS,  actions)
+
+  # Load 3d data
+  train_set_by3d = load_data( data_dir, TRAIN_SUBJECTS, actions, dim=3 )
+  test_set_by3d  = load_data( data_dir, TEST_SUBJECTS,  actions, dim=3 )
+
+  train_set_by3d = project_to_cameras( train_set_by3d, rcams )
+  test_set_by3d  = project_to_cameras( test_set_by3d, rcams )
+
+  # shなしのNose/Neck,Head,Thoraxの位置を指定の係数で加算し、Noseの位置を推定
+  param = head_nose_test.split("_")
+  head = float(param[0])
+  chin = float(param[1])
+  
+  thorax = 1 - chin - head
+  for key2d in train_set.keys():
+    (subj, b, fname) = key2d
+    key3d = (subj, b, fname[:-3])
+    ThoraxToNose_by3d = (chin * train_set_by3d[key3d][:,14*2:14*2+2] +
+                    head * train_set_by3d[key3d][:,15*2:15*2+2] +
+                    thorax * train_set_by3d[key3d][:,13*2:13*2+2]) - train_set_by3d[key3d][:,13*2:13*2+2]
+
+    train_set[key2d][:,15*2:15*2+2] = train_set[key2d][:,13*2:13*2+2] + ThoraxToNose_by3d
+
+  for key2d in test_set.keys():
+    (subj, b, fname) = key2d
+    key3d = (subj, b, fname[:-3])
+    ThoraxToNose_by3d = (chin * test_set_by3d[key3d][:,14*2:14*2+2] +
+                    head * test_set_by3d[key3d][:,15*2:15*2+2] +
+                    thorax * test_set_by3d[key3d][:,13*2:13*2+2]) - test_set_by3d[key3d][:,13*2:13*2+2]
+
+    test_set[key2d][:,15*2:15*2+2] = test_set[key2d][:,13*2:13*2+2] + ThoraxToNose_by3d
+
+  complete_train = copy.deepcopy( np.vstack( train_set.values() ))
+  data_mean, data_std,  dim_to_ignore, dim_to_use = normalization_stats( complete_train, dim=2 )
+
+  train_set = normalize_data( train_set, data_mean, data_std, dim_to_use )
+  test_set  = normalize_data( test_set,  data_mean, data_std, dim_to_use )
+
+  return train_set, test_set, data_mean, data_std, dim_to_ignore, dim_to_use
+
+def nose_instead_of_head(poses_set_2d):
+  ret_poses_set_2d = copy.deepcopy(poses_set_2d)
+  for t2d in ret_poses_set_2d.keys():
+    ret_poses_set_2d[t2d][:,15*2:15*2+2] = ret_poses_set_2d[t2d][:,14*2:14*2+2]
+  return ret_poses_set_2d
 
 def create_2d_data( actions, data_dir, rcams ):
   """
