@@ -95,8 +95,15 @@ def main(_):
 
     SUBJECT_IDS = [1, 5, 6, 7, 8, 9, 11]
     rcams = cameras.load_cameras(FLAGS.cameras_path, SUBJECT_IDS)
-    train_set_2d, test_set_2d, data_mean_2d, data_std_2d, dim_to_ignore_2d, dim_to_use_2d = data_utils.read_2d_predictions(
-        actions, FLAGS.data_dir)
+
+    if FLAGS.use_sh:
+        if FLAGS.head_nose_test == '':
+            train_set_2d, test_set_2d, data_mean_2d, data_std_2d, dim_to_ignore_2d, dim_to_use_2d = data_utils.read_2d_predictions(actions, FLAGS.data_dir)
+        else:
+            train_set_2d, test_set_2d, data_mean_2d, data_std_2d, dim_to_ignore_2d, dim_to_use_2d = data_utils.read_2d_predictions_change_head(actions, FLAGS.data_dir, rcams,head_nose_test=FLAGS.head_nose_test)
+    else:
+        train_set_2d, test_set_2d, data_mean_2d, data_std_2d, dim_to_ignore_2d, dim_to_use_2d = data_utils.create_2d_data( actions, FLAGS.data_dir, rcams )
+
     train_set_3d, test_set_3d, data_mean_3d, data_std_3d, dim_to_ignore_3d, dim_to_use_3d, train_root_positions, test_root_positions = data_utils.read_3d_data(
         actions, FLAGS.data_dir, FLAGS.camera_frame, rcams, FLAGS.predict_14)
 
